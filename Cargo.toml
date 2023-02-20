@@ -2,10 +2,10 @@
 authors = ["Cameron Kinsella"]
 name = "runzip"
 description = "Tool for extracting zip archives"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-zip = { version = "0.6", features = ["deflate"] }
+zip = { version = "0.6", features = ["deflate", "aes-crypto"] }
 encoding_rs = "0.8"
 clap = { version = "4.1", features = ["derive"] }

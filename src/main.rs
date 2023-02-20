@@ -1,8 +1,9 @@
 use clap::{arg, Parser};
 use encoding_rs::{Encoding, UTF_8};
 use std::path::{Path, PathBuf};
-use std::{fs, io, process};
+use std::{fs, io};
 use zip::read::ZipFile;
+use zip::result::{InvalidPassword, ZipError};
 use zip::ZipArchive;
 
 /// Tool for extracting zip archives
@@ -18,16 +19,40 @@ struct Args {
     #[arg(long, short = 'o')]
     out: Option<PathBuf>,
 
-    /// Codec to be used for filename encoding (default = UTF-8)
+    /// Password if the archive is encrypted
+    #[arg(long, short = 'p')]
+    password: Option<String>,
+
+    /// Codec to be used for filename encoding (default: UTF-8)
     #[arg(long, short = 'e')]
     encoding: Option<String>,
 
-    /// Verbose output
-    #[arg(long, short = 'v', default_value_t = false)]
-    verbose: bool,
+    /// Make output less verbose
+    #[arg(long, short = 's', default_value_t = false)]
+    silent: bool,
 }
 
-fn main() {
+#[derive(Debug)]
+enum Error {
+    Io(io::Error),
+    Zip(ZipError),
+    InvalidPassword,
+    EncodingError,
+}
+
+impl From<ZipError> for Error {
+    fn from(value: ZipError) -> Self {
+        Self::Zip(value)
+    }
+}
+
+impl From<InvalidPassword> for Error {
+    fn from(_: InvalidPassword) -> Self {
+        Self::InvalidPassword
+    }
+}
+
+fn main() -> Result<(), Error> {
     let args: Args = Args::parse();
 
     // Open zip file
@@ -35,17 +60,34 @@ fn main() {
     let zip = match fs::File::open(zip_path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("Unable to open zip file: {e}");
-            process::exit(1);
+            eprintln!("Unable to open zip file");
+            return Err(Error::Io(e));
         }
     };
+
+    // Get encoding
+    let mut encoding = UTF_8;
+    if let Some(enc) = args.encoding {
+        encoding = if let Some(enc) = Encoding::for_label(enc.as_str().as_bytes()) {
+            enc
+        } else {
+            eprintln!("Invalid encoding provided");
+            return Err(Error::EncodingError);
+        }
+    }
+
+    println!(
+        "Archive: {:?}\nEncoding: {}",
+        zip_path.file_name().unwrap(),
+        encoding.name()
+    );
 
     // Parse zip file
     let mut archive = match ZipArchive::new(zip) {
         Ok(z) => z,
         Err(e) => {
-            eprintln!("Unable to parse zip file: {e}");
-            process::exit(1);
+            eprintln!("Unable to parse zip file");
+            return Err(Error::Zip(e));
         }
     };
 
@@ -55,53 +97,46 @@ fn main() {
         let output_meta = match fs::metadata(&out) {
             Ok(m) => m,
             Err(e) => {
-                eprintln!("Invalid output directory: {e}");
-                process::exit(1);
+                eprintln!("Invalid output directory");
+                return Err(Error::Io(e));
             }
         };
         if output_meta.is_file() {
-            eprintln!("Error: output directory is not a directory");
-            process::exit(1);
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Output directory is not a directory",
+            )));
         }
         destination = out;
     }
 
-    // Get encoding
-    let mut encoding = UTF_8;
-    if let Some(enc) = args.encoding {
-        encoding = Encoding::for_label(enc.as_str().as_bytes()).unwrap_or_else(|| {
-            eprintln!("Invalid encoding provided");
-            process::exit(1);
-        });
-    }
-    println!(
-        "Archive: {:?}\nEncoding: {}",
-        zip_path.file_name().unwrap(),
-        encoding.name()
-    );
-
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).unwrap();
+        let mut file: ZipFile;
+        if let Some(password) = &args.password {
+            file = archive.by_index_decrypt(i, password.as_bytes())??;
+        } else {
+            file = archive.by_index(i)?;
+        }
         let outpath = match inflate(&mut file, &destination, encoding) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("Unable to extract file {}: {e}", file.name());
-                process::exit(1);
+                eprintln!("Unable to extract file {}", file.name());
+                return Err(Error::Io(e));
             }
         };
 
-        if args.verbose {
+        if !args.silent {
             {
                 let comment = file.comment();
                 if !comment.is_empty() {
-                    println!("\tFile {i} comment: {comment}");
+                    println!("  file {i} comment: {comment}");
                 }
             }
             if outpath.is_dir() {
-                println!("\tFile {i} extracted to \"{}\"", outpath.display());
+                println!("  {i} creating: \"{}\"", outpath.display());
             } else {
                 println!(
-                    "\tFile {i} extracted to \"{}\" ({} bytes)",
+                    "  {i} inflating: \"{}\" ({} bytes)",
                     outpath.display(),
                     file.size()
                 );
@@ -114,6 +149,7 @@ fn main() {
         archive.len(),
         fs::canonicalize(destination).unwrap().display()
     );
+    Ok(())
 }
 
 fn inflate(
