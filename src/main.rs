@@ -1,5 +1,6 @@
 use clap::{arg, Parser};
 use encoding_rs::{Encoding, UTF_8};
+use std::iter::successors;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 use zip::read::ZipFile;
@@ -110,6 +111,9 @@ fn main() -> Result<(), Error> {
         destination = out;
     }
 
+    let num_digits = |n| successors(Some(n), |&n| (n >= 10).then_some(n / 10)).count();
+    let archive_digits = num_digits(archive.len()) + 2;
+
     for i in 0..archive.len() {
         let mut file: ZipFile;
         if let Some(password) = &args.password {
@@ -129,14 +133,14 @@ fn main() -> Result<(), Error> {
             {
                 let comment = file.comment();
                 if !comment.is_empty() {
-                    println!("  file {i} comment: {comment}");
+                    println!("{i:>archive_digits$} comment:   {comment}");
                 }
             }
             if outpath.is_dir() {
-                println!("  {i} creating: \"{}\"", outpath.display());
+                println!("{i:>archive_digits$} creating:  \"{}\"", outpath.display());
             } else {
                 println!(
-                    "  {i} inflating: \"{}\" ({} bytes)",
+                    "{i:>archive_digits$} inflating: \"{}\" ({} bytes)",
                     outpath.display(),
                     file.size()
                 );
