@@ -3,7 +3,6 @@ use std::iter::successors;
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 use zip::read::ZipFile;
-use zip::result::{InvalidPassword, ZipError};
 use zip::ZipArchive;
 
 pub fn unzip(
@@ -24,7 +23,7 @@ pub fn unzip(
     // Get encoding
     let mut use_encoding = UTF_8;
     if let Some(enc) = encoding {
-        use_encoding = if let Some(enc) = Encoding::for_label(enc.as_str().as_bytes()) {
+        use_encoding = if let Some(enc) = Encoding::for_label(enc.as_bytes()) {
             enc
         } else {
             eprintln!("Invalid encoding provided");
